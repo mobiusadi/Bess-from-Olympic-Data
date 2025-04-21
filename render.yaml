@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: bess-map
+    env: python
+    runtime: python-3.9
+    plan: free
+    repo: https://github.com/your-username/your-repo
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:server
