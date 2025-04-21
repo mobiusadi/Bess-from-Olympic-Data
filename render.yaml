@@ -3,8 +3,8 @@ services:
     name: bess-map
     env: python
     runtime: python-3.9
-    plan: free
-    repo: https://github.com/your-username/your-repo
+    plan: free  # Change to 'starter' for paid
+    repo: https://github.com/your-username/Olympics_Map_1
     branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:server
+    startCommand: gunicorn --config gunicorn.conf.py app:server
