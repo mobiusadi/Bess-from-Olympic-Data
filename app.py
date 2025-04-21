@@ -60,12 +60,15 @@ for col in required_columns:
     if col not in df.columns:
         raise ValueError(f"Missing required column: {col}")
 
-# Add index if not present
-if 'index' not in df.columns:
-    df['index'] = range(len(df))
+# Convert Event Date to datetime and sort by most recent
+df['Event Date'] = pd.to_datetime(df['Event Date'], errors='coerce')
+df = df.sort_values(by='Event Date', ascending=False).reset_index(drop=True)
+
+# Add index for referencing
+df['index'] = range(len(df))
 df['index'] = df['index'].astype(int)
 
-# Check for Lat/Long columns first
+# Check for Lat/Long columns
 if 'Lat' in df.columns and 'Long' in df.columns:
     df['latitude'] = pd.to_numeric(df['Lat'], errors='coerce')
     df['longitude'] = pd.to_numeric(df['Long'], errors='coerce')
@@ -141,7 +144,7 @@ app = dash.Dash(__name__)
 
 # Layout
 app.layout = html.Div(
-    style={'display': 'flex', 'height': '100vh'},
+    style={'display': 'flex', 'height': '100vh', 'fontFamily': 'Arial, sans-serif'},
     children=[
         html.Div(
             id='location-list',
@@ -150,10 +153,10 @@ app.layout = html.Div(
                 html.Div(
                     id={'type': 'location-item', 'index': i},
                     children=[
-                        html.H3(f"{row['Location']}", style={'margin': 0}),
+                        html.H3(f"{row['Location']}", style={'margin': 0, 'fontFamily': 'Arial, sans-serif'}),
                         html.P(
-                            f"Date: {row['Event Date']} | Application: {row['Application']} | Cause: {row['Cause']}",
-                            style={'margin': 0, 'fontSize': '14px'}
+                            f"Date: {row['Event Date'].strftime('%Y-%m-%d')} | Application: {row['Application']} | Cause: {row['Cause']}",
+                            style={'margin': 0, 'fontSize': '14px', 'fontFamily': 'Arial, sans-serif'}
                         )
                     ],
                     style={'marginBottom': '10px', 'padding': '10px', 'cursor': 'pointer'},
@@ -161,7 +164,7 @@ app.layout = html.Div(
                 )
                 for i, row in df.iterrows()
             ] if not df.empty else [
-                html.P("No data available. Check dataset for valid coordinates.")
+                html.P("No data available. Check dataset for valid coordinates.", style={'fontFamily': 'Arial, sans-serif'})
             ]
         ),
         html.Div(
@@ -244,10 +247,10 @@ def update_app(n_clicks_list, n_clicks_markers, current_items, item_ids):
         html.Div(
             id={'type': 'location-item', 'index': i},
             children=[
-                html.H3(f"{row['Location']}", style={'margin': 0}),
+                html.H3(f"{row['Location']}", style={'margin': 0, 'fontFamily': 'Arial, sans-serif'}),
                 html.P(
-                    f"Date: {row['Event Date']} | Application: {row['Application']} | Cause: {row['Cause']}",
-                    style={'margin': 0, 'fontSize': '14px'}
+                    f"Date: {row['Event Date'].strftime('%Y-%m-%d')} | Application: {row['Application']} | Cause: {row['Cause']}",
+                    style={'margin': 0, 'fontSize': '14px', 'fontFamily': 'Arial, sans-serif'}
                 )
             ],
             style={
