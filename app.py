@@ -26,33 +26,24 @@ if not os.path.exists(data_file):
 else:
     print(f"Found {data_file} in {os.getcwd()}")
 
-# Read data from Excel or CSV
+# Read data
 try:
     df = pd.read_excel(data_file, engine='openpyxl')
-    # Drop unnamed/empty columns
     df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
     print(f"Loaded {len(df)} records from {data_file}")
     print(f"Column names: {df.columns.tolist()}")
 except Exception as e:
-    try:
-        df = pd.read_csv('bess_data.csv')
-        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-        print(f"Loaded {len(df)} records from bess_data.csv")
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        # Fallback data
-        df = pd.DataFrame({
-            'index': range(5),
-            'Location': [
-                'Moss Landing, CA', 'Surprise, AZ', 'Escondido, CA', 'Liverpool, UK', 'Tokyo, Japan'
-            ],
-            'Lat': [36.5786, 33.6391, 33.1192, 53.4084, 35.6762],
-            'Long': [-121.6954, -112.4128, -117.0864, -2.9916, 139.6503],
-            'Country': ['USA', 'USA', 'USA', 'United Kingdom', 'Japan'],
-            'Event Date': ['2022-09-04', '2019-04-19', '2020-12-05', '2021-02-15', '2023-03-10'],
-            'Application': ['Energy Storage', 'Grid Support', 'Renewable Integration', 'Energy Storage', 'Backup Power'],
-            'Cause': ['Thermal Runaway', 'Overheating', 'Battery Failure', 'Electrical Fault', 'Unknown']
-        })
+    print(f"Error loading data: {e}")
+    df = pd.DataFrame({
+        'index': range(5),
+        'Location': ['Moss Landing, CA', 'Surprise, AZ', 'Escondido, CA', 'Liverpool, UK', 'Tokyo, Japan'],
+        'Lat': [36.5786, 33.6391, 33.1192, 53.4084, 35.6762],
+        'Long': [-121.6954, -112.4128, -117.0864, -2.9916, 139.6503],
+        'Country': ['USA', 'USA', 'USA', 'United Kingdom', 'Japan'],
+        'Event Date': ['2022-09-04', '2019-04-19', '2020-12-05', '2021-02-15', '2023-03-10'],
+        'Application': ['Energy Storage', 'Grid Support', 'Renewable Integration', 'Energy Storage', 'Backup Power'],
+        'Cause': ['Thermal Runaway', 'Overheating', 'Battery Failure', 'Electrical Fault', 'Unknown']
+    })
 
 # Ensure required columns
 required_columns = ['Location', 'Event Date', 'Application', 'Cause']
@@ -60,33 +51,30 @@ for col in required_columns:
     if col not in df.columns:
         raise ValueError(f"Missing required column: {col}")
 
-# Convert Event Date to datetime and sort by most recent
+# Sort by Event Date
 df['Event Date'] = pd.to_datetime(df['Event Date'], errors='coerce')
 df = df.sort_values(by='Event Date', ascending=False).reset_index(drop=True)
 
-# Add index for referencing
+# Add index
 df['index'] = range(len(df))
 df['index'] = df['index'].astype(int)
 
-# Check for Lat/Long columns
+# Handle Lat/Long
 if 'Lat' in df.columns and 'Long' in df.columns:
     df['latitude'] = pd.to_numeric(df['Lat'], errors='coerce')
     df['longitude'] = pd.to_numeric(df['Long'], errors='coerce')
     print("Using Lat and Long columns")
 else:
-    # Parse Custom location (Lat,Lon) as fallback
     def parse_lat_lon(coord):
         try:
             coord = str(coord).strip()
             if coord in ['nan', '', 'N/A']:
                 return None, None
-            # Clean Excel prefixes
             coord = coord.replace("='=", "(").replace("=", "").replace("'", "")
-            # Match formats: (lat, lon), [lat, lon], lat, lon
             patterns = [
-                r'\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)',  # (lat, lon)
-                r'\s*\[\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\]',  # [lat, lon]
-                r'\s*([-\d.]+)\s*,\s*([-\d.]+)\s*'          # lat, lon
+                r'\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)',
+                r'\s*\[\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\]',
+                r'\s*([-\d.]+)\s*,\s*([-\d.]+)\s*'
             ]
             for pattern in patterns:
                 match = re.match(pattern, coord)
@@ -105,7 +93,7 @@ else:
         lambda x: pd.Series(parse_lat_lon(x))
     )
 
-# Geocode missing coordinates (limit to 10 to avoid rate limits)
+# Geocode missing coordinates
 missing_coords = df[df['latitude'].isna() | df['longitude'].isna()]
 if not missing_coords.empty:
     print(f"Geocoding {min(len(missing_coords), 10)} rows with missing/invalid coordinates...")
@@ -113,24 +101,14 @@ if not missing_coords.empty:
         loc = df.loc[idx, 'Location']
         coords = geocode_location(loc)
         df.loc[idx, ['latitude', 'longitude']] = coords
-        time.sleep(1)  # Rate limit
+        time.sleep(1)
         print(f"Geocoded {loc}: {coords}")
 
-# Final check for missing coordinates
-missing_coords = df[df['latitude'].isna() | df['longitude'].isna()]
-if not missing_coords.empty:
-    print(f"Warning: {len(missing_coords)} rows still have invalid/missing coordinates:")
-    print(missing_coords[['Location', 'Lat', 'Long']])
-
-# Drop rows with missing coordinates
+# Drop invalid coordinates
 df = df.dropna(subset=['latitude', 'longitude'])
 print(f"Final dataset: {len(df)} records")
 
-# Warn if no data
-if df.empty:
-    print("Warning: No valid data after processing. Check 'Lat'/'Long' columns for valid numbers.")
-
-# Calculate initial map center
+# Map center
 if not df.empty:
     center_lat = df['latitude'].mean()
     center_lon = df['longitude'].mean()
@@ -164,7 +142,7 @@ app.layout = html.Div(
                 )
                 for i, row in df.iterrows()
             ] if not df.empty else [
-                html.P("No data available. Check dataset for valid coordinates.", style={'fontFamily': 'Arial, sans-serif'})
+                html.P("No data available.", style={'fontFamily': 'Arial, sans-serif'})
             ]
         ),
         html.Div(
@@ -211,11 +189,8 @@ app.layout = html.Div(
 )
 def update_app(n_clicks_list, n_clicks_markers, current_items, item_ids):
     print("update_app CALLED")
-    print(f"n_clicks_list: {n_clicks_list}")
-    print(f"n_clicks_markers: {n_clicks_markers}")
     ctx = dash.callback_context
     if not ctx.triggered_id:
-        print("No triggered ID")
         raise PreventUpdate
 
     clicked_index = -1
@@ -226,10 +201,8 @@ def update_app(n_clicks_list, n_clicks_markers, current_items, item_ids):
         clicked_index = int(ctx.triggered_id['index'])
         print(f"Map click: Index {clicked_index}, Location: {df.iloc[clicked_index]['Location']}")
     else:
-        print(f"Invalid trigger: {ctx.triggered_id}")
         raise PreventUpdate
 
-    # Update markers
     markers = [
         dl.CircleMarker(
             center=[row['latitude'], row['longitude']],
@@ -241,8 +214,8 @@ def update_app(n_clicks_list, n_clicks_markers, current_items, item_ids):
         )
         for i, row in df.iterrows()
     ]
+    print(f"Updated markers: Selected index {clicked_index} set to red")
 
-    # Update list
     updated_items = [
         html.Div(
             id={'type': 'location-item', 'index': i},
@@ -266,7 +239,6 @@ def update_app(n_clicks_list, n_clicks_markers, current_items, item_ids):
 
     return markers, updated_items, clicked_index
 
-# Clientside callback for scrolling and map centering
 app.clientside_callback(
     """
     function(children, selected_index) {
@@ -276,13 +248,20 @@ app.clientside_callback(
             if (highlighted) {
                 highlighted.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
-            const map = window.dash_leaflet_map;
-            if (map && window.dash_clientside_data && window.dash_clientside_data[selected_index]) {
-                const [lat, lng] = window.dash_clientside_data[selected_index];
-                map.setView([lat, lng], 8);
-            } else {
-                console.log("Map or data not available:", { map: !!map, data: window.dash_clientside_data });
-            }
+            let attempts = 0;
+            const maxAttempts = 50;
+            const checkMap = setInterval(() => {
+                if (window.dash_leaflet_map && window.dash_clientside_data && window.dash_clientside_data[selected_index]) {
+                    const [lat, lng] = window.dash_clientside_data[selected_index];
+                    window.dash_leaflet_map.setView([lat, lng], 8);
+                    clearInterval(checkMap);
+                    console.log("Map centered on index " + selected_index);
+                } else if (attempts >= maxAttempts) {
+                    console.log("Map centering timeout");
+                    clearInterval(checkMap);
+                }
+                attempts++;
+            }, 100);
         }
         return window.dash_clientside.no_update;
     }
@@ -292,11 +271,10 @@ app.clientside_callback(
     Input('selected-index', 'data')
 )
 
-# Inject coordinates for clientside centering
 app.clientside_callback(
     """
-    function() {
-        console.log("Injecting coordinates");
+    function(map_id) {
+        console.log("Injecting coordinates for map_id: " + map_id);
         window.dash_clientside_data = %s;
         return window.dash_clientside.no_update;
     }
@@ -304,6 +282,9 @@ app.clientside_callback(
     Output('location-map', 'id'),
     Input('location-map', 'id')
 )
+
+# Expose Dash server for Gunicorn
+server = app.server
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080)
