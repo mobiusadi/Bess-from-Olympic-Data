@@ -8,6 +8,7 @@ from geopy.geocoders import Nominatim
 import time
 import os
 import pickle
+import hashlib
 
 # Initialize geocoder
 geolocator = Nominatim(user_agent="bess_map")
@@ -21,14 +22,33 @@ def geocode_location(location):
 
 # Verify file existence
 data_file = 'bess_data.xlsx'
-cache_file = 'bess_data_cache.pkl'
+data_cache_file = 'bess_data_cache.pkl'
+cards_cache_file = 'cards_cache.pkl'
 
-# Load data
-if os.path.exists(cache_file):
-    with open(cache_file, 'rb') as f:
-        df = pickle.load(f)
-    print(f"Loaded {len(df)} records from cache")
-else:
+# Check if data file has changed
+def get_file_hash(file_path):
+    if not os.path.exists(file_path):
+        return None
+    with open(file_path, 'rb') as f:
+        return hashlib.md5(f.read()).hexdigest()
+
+# Load or generate data
+data_hash = get_file_hash(data_file)
+df = None
+if os.path.exists(data_cache_file):
+    try:
+        with open(data_cache_file, 'rb') as f:
+            cached_data = pickle.load(f)
+        if isinstance(cached_data, tuple) and len(cached_data) == 2:
+            cached_df, cached_hash = cached_data
+            if cached_hash == data_hash:
+                df = cached_df
+                print(f"Loaded {len(df)} records from data cache")
+    except Exception as e:
+        print(f"Error loading data cache: {e}")
+        df = None
+
+if df is None:
     if not os.path.exists(data_file):
         print(f"Error: {data_file} not found in {os.getcwd()}")
     else:
@@ -86,9 +106,9 @@ else:
                 time.sleep(1)
                 print(f"Geocoded {loc}: {coords}")
         df = df.dropna(subset=['latitude', 'longitude'])
-        with open(cache_file, 'wb') as f:
-            pickle.dump(df, f)
-        print(f"Saved {len(df)} records to cache")
+        with open(data_cache_file, 'wb') as f:
+            pickle.dump((df, data_hash), f)
+        print(f"Saved {len(df)} records to data cache")
     except Exception as e:
         print(f"Error loading data: {e}")
         df = pd.DataFrame({
@@ -101,7 +121,9 @@ else:
             'Application': ['Energy Storage', 'Grid Support', 'Renewable Integration', 'Energy Storage', 'Backup Power'],
             'Cause': ['Thermal Runaway', 'Overheating', 'Battery Failure', 'Electrical Fault', 'Unknown'],
             'Capacity (MW)': [400, 100, 200, 50, 300],
-            'Capacity (MWh)': [1600, 400, 800, 200, 1200]
+            'Capacity (MWh)': [1600, 400, 800, 200, 1200],
+            'Source URL 1': ['https://example.com/1', 'https://example.com/2', 'https://example.com/3', 'https://example.com/4', 'https://example.com/5'],
+            'Image URL 1': [None, None, 'https://www.staradvertiser.com/wp-content/uploads/2015/11/20120801_brk_windfarmmap.jpg', None, None]
         })
 
 # Ensure required columns
@@ -111,6 +133,90 @@ for col in required_columns:
         raise ValueError(f"Missing required column: {col}")
 
 print(f"Final dataset: {len(df)} records")
+
+# Detect URL and image columns
+url_columns = ['Source URL 1', 'Source URL 2', 'Source URL 3']
+image_columns = ['Image URL 1']  # Only use Image URL 1 for now
+print(f"Detected URL columns: {url_columns}")
+print(f"Detected image columns: {image_columns}")
+
+# Cache cards
+def generate_cards():
+    cards = [
+        html.Div(
+            id={'type': 'location-item', 'index': i},
+            children=[
+                html.Div(
+                    style={'display': 'flex', 'alignItems': 'flex-start'},
+                    children=[
+                        html.Img(
+                            src=row[image_columns[0]],
+                            style={'maxWidth': '150px', 'height': 'auto', 'marginRight': '10px'}
+                        ) if image_columns and pd.notnull(row[image_columns[0]]) and str(row[image_columns[0]]).startswith(('http://', 'https://'))
+                        else html.Div(style={'width': '150px'}),  # Placeholder if no image
+                        html.Div([
+                            html.H3(f"{row['Location']}", style={'margin': 0, 'fontFamily': 'Arial, sans-serif'}),
+                            html.Div([
+                                html.P([
+                                    html.Span(f"{col}: ", style={
+                                        'fontWeight': 'bold',
+                                        'fontFamily': 'Arial, sans-serif',
+                                        'fontSize': '14px'
+                                    }),
+                                    html.A(
+                                        str(row[col]),
+                                        href=str(row[col]),
+                                        target="_blank",
+                                        style={
+                                            'fontWeight': 'normal',
+                                            'color': 'blue',
+                                            'textDecoration': 'underline',
+                                            'fontSize': '14px',
+                                            'fontFamily': 'Arial, sans-serif'
+                                        }
+                                    ) if col in url_columns and pd.notnull(row[col]) and str(row[col]).startswith(('http://', 'https://'))
+                                    else html.Span(
+                                        f"{row[col].strftime('%Y-%m-%d') if col == 'Event Date' and pd.notnull(row[col]) else str(row[col])}",
+                                        style={
+                                            'fontWeight': 'bold' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'normal',
+                                            'color': 'red' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'black',
+                                            'fontSize': '18px' if col in ['Capacity (MW)', 'Capacity (MWh)'] else '14px',
+                                            'fontFamily': 'Arial, sans-serif'
+                                        }
+                                    )
+                                ], style={'margin': '2px 0'})
+                                for col in df.columns if col not in ['index', 'latitude', 'longitude', 'Lat', 'Long', 'Image URL 1', 'Image URL 2', 'Image URL 3']
+                            ], style={'marginTop': '5px'})
+                        ])
+                    ]
+                )
+            ],
+            style={'marginBottom': '10px', 'padding': '10px', 'cursor': 'pointer'},
+            **{'data-index': i}
+        )
+        for i, row in df.iterrows()
+    ]
+    return cards
+
+location_list_children = None
+if os.path.exists(cards_cache_file):
+    try:
+        with open(cards_cache_file, 'rb') as f:
+            cached_cards_data = pickle.load(f)
+        if isinstance(cached_cards_data, tuple) and len(cached_cards_data) == 2:
+            cached_cards, cached_hash = cached_cards_data
+            if cached_hash == data_hash:
+                location_list_children = cached_cards
+                print("Loaded cards from cache")
+    except Exception as e:
+        print(f"Error loading cards cache: {e}")
+        location_list_children = None
+
+if location_list_children is None:
+    location_list_children = generate_cards()
+    with open(cards_cache_file, 'wb') as f:
+        pickle.dump((location_list_children, data_hash), f)
+    print("Generated and cached cards")
 
 # Map center
 if not df.empty:
@@ -137,36 +243,7 @@ app.layout = html.Div([
                 html.Div(
                     id='location-list',
                     style={'width': '30%', 'overflowY': 'auto', 'padding': '20px'},
-                    children=[
-                        html.Div(
-                            id={'type': 'location-item', 'index': i},
-                            children=[
-                                html.H3(f"{row['Location']}", style={'margin': 0, 'fontFamily': 'Arial, sans-serif'}),
-                                html.Div([
-                                    html.P([
-                                        html.Span(f"{col}: ", style={
-                                            'fontWeight': 'bold',
-                                            'fontFamily': 'Arial, sans-serif',
-                                            'fontSize': '14px'
-                                        }),
-                                        html.Span(
-                                            f"{row[col].strftime('%Y-%m-%d') if col == 'Event Date' and pd.notnull(row[col]) else str(row[col])}",
-                                            style={
-                                                'fontWeight': 'bold' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'normal',
-                                                'color': 'red' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'black',
-                                                'fontSize': '18px' if col in ['Capacity (MW)', 'Capacity (MWh)'] else '14px',
-                                                'fontFamily': 'Arial, sans-serif'
-                                            }
-                                        )
-                                    ], style={'margin': '2px 0'})
-                                    for col in df.columns if col not in ['index', 'latitude', 'longitude', 'Lat', 'Long']
-                                ], style={'marginTop': '5px'})
-                            ],
-                            style={'marginBottom': '10px', 'padding': '10px', 'cursor': 'pointer'},
-                            **{'data-index': i}
-                        )
-                        for i, row in df.iterrows()
-                    ] if not df.empty else [
+                    children=location_list_children if not df.empty else [
                         html.P("No data available.", style={'fontFamily': 'Arial, sans-serif'})
                     ]
                 ),
@@ -248,26 +325,50 @@ def update_app(n_clicks_list, n_clicks_markers, current_items, item_ids):
             html.Div(
                 id={'type': 'location-item', 'index': i},
                 children=[
-                    html.H3(f"{row['Location']}", style={'margin': 0, 'fontFamily': 'Arial, sans-serif'}),
-                    html.Div([
-                        html.P([
-                            html.Span(f"{col}: ", style={
-                                'fontWeight': 'bold',
-                                'fontFamily': 'Arial, sans-serif',
-                                'fontSize': '14px'
-                            }),
-                            html.Span(
-                                f"{row[col].strftime('%Y-%m-%d') if col == 'Event Date' and pd.notnull(row[col]) else str(row[col])}",
-                                style={
-                                    'fontWeight': 'bold' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'normal',
-                                    'color': 'red' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'black',
-                                    'fontSize': '18px' if col in ['Capacity (MW)', 'Capacity (MWh)'] else '14px',
-                                    'fontFamily': 'Arial, sans-serif'
-                                }
-                            )
-                        ], style={'margin': '2px 0'})
-                        for col in df.columns if col not in ['index', 'latitude', 'longitude', 'Lat', 'Long']
-                    ], style={'marginTop': '5px'})
+                    html.Div(
+                        style={'display': 'flex', 'alignItems': 'flex-start'},
+                        children=[
+                            html.Img(
+                                src=row[image_columns[0]],
+                                style={'maxWidth': '150px', 'height': 'auto', 'marginRight': '10px'}
+                            ) if image_columns and pd.notnull(row[image_columns[0]]) and str(row[image_columns[0]]).startswith(('http://', 'https://'))
+                            else html.Div(style={'width': '150px'}),
+                            html.Div([
+                                html.H3(f"{row['Location']}", style={'margin': 0, 'fontFamily': 'Arial, sans-serif'}),
+                                html.Div([
+                                    html.P([
+                                        html.Span(f"{col}: ", style={
+                                            'fontWeight': 'bold',
+                                            'fontFamily': 'Arial, sans-serif',
+                                            'fontSize': '14px'
+                                        }),
+                                        html.A(
+                                            str(row[col]),
+                                            href=str(row[col]),
+                                            target="_blank",
+                                            style={
+                                                'fontWeight': 'normal',
+                                                'color': 'blue',
+                                                'textDecoration': 'underline',
+                                                'fontSize': '14px',
+                                                'fontFamily': 'Arial, sans-serif'
+                                            }
+                                        ) if col in url_columns and pd.notnull(row[col]) and str(row[col]).startswith(('http://', 'https://'))
+                                        else html.Span(
+                                            f"{row[col].strftime('%Y-%m-%d') if col == 'Event Date' and pd.notnull(row[col]) else str(row[col])}",
+                                            style={
+                                                'fontWeight': 'bold' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'normal',
+                                                'color': 'red' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'black',
+                                                'fontSize': '18px' if col in ['Capacity (MW)', 'Capacity (MWh)'] else '14px',
+                                                'fontFamily': 'Arial, sans-serif'
+                                            }
+                                        )
+                                    ], style={'margin': '2px 0'})
+                                    for col in df.columns if col not in ['index', 'latitude', 'longitude', 'Lat', 'Long', 'Image URL 1', 'Image URL 2', 'Image URL 3']
+                                ], style={'marginTop': '5px'})
+                            ])
+                        ]
+                    )
                 ],
                 style={
                     'marginBottom': '10px',
@@ -334,3 +435,10 @@ server = app.server
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080)
+
+# Future image caching:
+# 1. Create /images/ directory.
+# 2. Download images from Image URL 1, Image URL 2, Image URL 3 using requests.
+# 3. Save as /images/{index}_{col}.jpg (e.g., /images/2_Image_URL_1.jpg).
+# 4. Serve images via Dash assets: app.get_asset_url(f"{index}_{col}.jpg").
+# 5. Update html.Img src to use local paths.
