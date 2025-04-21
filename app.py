@@ -99,7 +99,9 @@ else:
             'Country': ['USA', 'USA', 'USA', 'United Kingdom', 'Japan'],
             'Event Date': ['2022-09-04', '2019-04-19', '2020-12-05', '2021-02-15', '2023-03-10'],
             'Application': ['Energy Storage', 'Grid Support', 'Renewable Integration', 'Energy Storage', 'Backup Power'],
-            'Cause': ['Thermal Runaway', 'Overheating', 'Battery Failure', 'Electrical Fault', 'Unknown']
+            'Cause': ['Thermal Runaway', 'Overheating', 'Battery Failure', 'Electrical Fault', 'Unknown'],
+            'Capacity (MW)': [400, 100, 200, 50, 300],
+            'Capacity (MWh)': [1600, 400, 800, 200, 1200]
         })
 
 # Ensure required columns
@@ -140,10 +142,25 @@ app.layout = html.Div([
                             id={'type': 'location-item', 'index': i},
                             children=[
                                 html.H3(f"{row['Location']}", style={'margin': 0, 'fontFamily': 'Arial, sans-serif'}),
-                                html.P(
-                                    f"Date: {row['Event Date'].strftime('%Y-%m-%d')} | Application: {row['Application']} | Cause: {row['Cause']}",
-                                    style={'margin': 0, 'fontSize': '14px', 'fontFamily': 'Arial, sans-serif'}
-                                )
+                                html.Div([
+                                    html.P([
+                                        html.Span(f"{col}: ", style={
+                                            'fontWeight': 'bold',
+                                            'fontFamily': 'Arial, sans-serif',
+                                            'fontSize': '14px'
+                                        }),
+                                        html.Span(
+                                            f"{row[col].strftime('%Y-%m-%d') if col == 'Event Date' and pd.notnull(row[col]) else str(row[col])}",
+                                            style={
+                                                'fontWeight': 'bold' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'normal',
+                                                'color': 'red' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'black',
+                                                'fontSize': '18px' if col in ['Capacity (MW)', 'Capacity (MWh)'] else '14px',
+                                                'fontFamily': 'Arial, sans-serif'
+                                            }
+                                        )
+                                    ], style={'margin': '2px 0'})
+                                    for col in df.columns if col not in ['index', 'latitude', 'longitude', 'Lat', 'Long']
+                                ], style={'marginTop': '5px'})
                             ],
                             style={'marginBottom': '10px', 'padding': '10px', 'cursor': 'pointer'},
                             **{'data-index': i}
@@ -232,10 +249,25 @@ def update_app(n_clicks_list, n_clicks_markers, current_items, item_ids):
                 id={'type': 'location-item', 'index': i},
                 children=[
                     html.H3(f"{row['Location']}", style={'margin': 0, 'fontFamily': 'Arial, sans-serif'}),
-                    html.P(
-                        f"Date: {row['Event Date'].strftime('%Y-%m-%d')} | Application: {row['Application']} | Cause: {row['Cause']}",
-                        style={'margin': 0, 'fontSize': '14px', 'fontFamily': 'Arial, sans-serif'}
-                    )
+                    html.Div([
+                        html.P([
+                            html.Span(f"{col}: ", style={
+                                'fontWeight': 'bold',
+                                'fontFamily': 'Arial, sans-serif',
+                                'fontSize': '14px'
+                            }),
+                            html.Span(
+                                f"{row[col].strftime('%Y-%m-%d') if col == 'Event Date' and pd.notnull(row[col]) else str(row[col])}",
+                                style={
+                                    'fontWeight': 'bold' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'normal',
+                                    'color': 'red' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'black',
+                                    'fontSize': '18px' if col in ['Capacity (MW)', 'Capacity (MWh)'] else '14px',
+                                    'fontFamily': 'Arial, sans-serif'
+                                }
+                            )
+                        ], style={'margin': '2px 0'})
+                        for col in df.columns if col not in ['index', 'latitude', 'longitude', 'Lat', 'Long']
+                    ], style={'marginTop': '5px'})
                 ],
                 style={
                     'marginBottom': '10px',
