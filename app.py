@@ -1,5 +1,5 @@
 import dash
-from dash import dcc, html, Input, Output, State, clientside_callback
+from dash import dcc, html, Input, Output, State, clientside_callback, Patch
 import dash_leaflet as dl
 import pandas as pd
 from dash.exceptions import PreventUpdate
@@ -261,7 +261,7 @@ app.layout = html.Div([
                 ]
             ),
             html.Div(
-                style={'width': '70%'},
+                style={'width': '70%', 'position': 'relative'},
                 children=[
                     dl.Map(
                         id='location-map',
@@ -293,7 +293,31 @@ app.layout = html.Div([
     )
 ])
 
-# Clientside callback for marker and card updates
+# Server-side callback to update marker-layer
+@app.callback(
+    Output('marker-layer', 'children'),
+    Input('selected-index', 'data'),
+    prevent_initial_call=True
+)
+def update_markers(selected_index):
+    print(f"Updating markers: selected_index={selected_index}")
+    patched_markers = Patch()
+    for i in range(len(df)):
+        radius = scale_radius(df.iloc[i]['Capacity (MW)'])
+        color = 'red' if i == selected_index else 'blue'
+        patched_markers.append(
+            dl.CircleMarker(
+                center=[df.iloc[i]['latitude'], df.iloc[i]['longitude']],
+                radius=radius * 1.5 if i == selected_index else radius,
+                color=color,
+                fillColor=color,
+                fillOpacity=0.8,
+                id={'type': 'marker', 'index': i}
+            )
+        )
+    return patched_markers
+
+# Clientside callback for card updates and map centering
 app.clientside_callback(
     """
     function(n_clicks_list, n_clicks_markers, selected_index, children) {
@@ -305,21 +329,6 @@ app.clientside_callback(
 
         console.log("Clientside update: selected_index=" + selected_index);
 
-        // Update markers
-        const maxCapacity = %s;
-        const markers = window.dash_clientside_data.map(([lat, lng, capacity], i) => {
-            const baseRadius = capacity > 0 && maxCapacity > 0 ? 
-                5 + (20 - 5) * (capacity / maxCapacity) : 5;
-            return {
-                position: [lat, lng],
-                radius: i === selected_index ? baseRadius * 1.5 : baseRadius,
-                color: i === selected_index ? 'red' : 'blue',
-                fillColor: i === selected_index ? 'red' : 'blue',
-                fillOpacity: 0.8,
-                id: {'type': 'marker', 'index': i}
-            };
-        });
-
         // Update card styles
         const updated_children = children.map((child, i) => {
             child.props.style = {
@@ -329,22 +338,7 @@ app.clientside_callback(
             return child;
         });
 
-        return [markers, updated_children];
-    }
-    """ % (df['Capacity (MW)'].max() if not df.empty else 1),
-    [Output('marker-layer', 'children'),
-     Output('location-list', 'children')],
-    [Input({'type': 'location-item', 'index': dash.ALL}, 'n_clicks'),
-     Input({'type': 'marker', 'index': dash.ALL}, 'n_clicks'),
-     Input('selected-index', 'data')],
-    State('location-list', 'children')
-)
-
-# Clientside callback for map centering and scrolling
-app.clientside_callback(
-    """
-    function(children, selected_index) {
-        console.log("Clientside triggered: selected_index=" + selected_index);
+        // Center map on selected marker
         if (selected_index >= 0) {
             const highlighted = document.querySelector(`[data-index="${selected_index}"]`);
             if (highlighted) {
@@ -365,23 +359,26 @@ app.clientside_callback(
                 attempts++;
             }, 100);
         }
-        return window.dash_clientside.no_update;
+
+        return updated_children;
     }
     """,
-    Output('location-list', 'id'),
-    Input('location-list', 'children'),
-    Input('selected-index', 'data')
+    Output('location-list', 'children'),
+    [Input({'type': 'location-item', 'index': dash.ALL}, 'n_clicks'),
+     Input({'type': 'marker', 'index': dash.ALL}, 'n_clicks'),
+     Input('selected-index', 'data')],
+    State('location-list', 'children')
 )
 
-# Clientside callback to inject coordinates and capacities
+# Clientside callback to inject coordinates
 app.clientside_callback(
     """
     function(map_id) {
-        console.log("Injecting coordinates and capacities for map_id: " + map_id);
+        console.log("Injecting coordinates for map_id: " + map_id);
         window.dash_clientside_data = %s;
         return window.dash_clientside.no_update;
     }
-    """ % (df[['latitude', 'longitude', 'Capacity (MW)']].values.tolist() if not df.empty else []),
+    """ % (df[['latitude', 'longitude']].values.tolist() if not df.empty else []),
     Output('location-map', 'id'),
     Input('location-map', 'id')
 )
