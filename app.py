@@ -9,6 +9,7 @@ import time
 import os
 import pickle
 import hashlib
+import numpy as np
 
 # Initialize geocoder
 geolocator = Nominatim(user_agent="bess_map")
@@ -19,6 +20,16 @@ def geocode_location(location):
         return loc.latitude, loc.longitude if loc else (None, None)
     except:
         return None, None
+
+# Scale marker radius based on Capacity (MW)
+def scale_radius(capacity, min_radius=5, max_radius=20, max_capacity=None):
+    if max_capacity is None:
+        max_capacity = df['Capacity (MW)'].max() if 'Capacity (MW)' in df.columns else 1
+    if max_capacity == 0 or pd.isna(capacity) or capacity <= 0:
+        return min_radius
+    # Linear scaling
+    scaled = min_radius + (max_radius - min_radius) * (capacity / max_capacity)
+    return round(scaled, 2)
 
 # Verify file existence
 data_file = 'bess_data.xlsx'
@@ -106,6 +117,8 @@ if df is None:
                 time.sleep(1)
                 print(f"Geocoded {loc}: {coords}")
         df = df.dropna(subset=['latitude', 'longitude'])
+        # Ensure Capacity (MW) is numeric
+        df['Capacity (MW)'] = pd.to_numeric(df['Capacity (MW)'], errors='coerce').fillna(0)
         with open(data_cache_file, 'wb') as f:
             pickle.dump((df, data_hash), f)
         print(f"Saved {len(df)} records to data cache")
@@ -131,6 +144,9 @@ required_columns = ['Location', 'Event Date', 'Application', 'Cause']
 for col in required_columns:
     if col not in df.columns:
         raise ValueError(f"Missing required column: {col}")
+
+# Ensure Capacity (MW) is numeric
+df['Capacity (MW)'] = pd.to_numeric(df['Capacity (MW)'], errors='coerce').fillna(0)
 
 print(f"Final dataset: {len(df)} records")
 
@@ -191,7 +207,7 @@ def generate_cards():
                     ]
                 )
             ],
-            style={'marginBottom': '10px', 'padding': '10px', 'cursor': 'pointer'},
+            style={'marginBottom': '10px', 'padding': '10px', 'cursor': 'pointer', 'border': '1px solid black'},
             **{'data-index': i}
         )
         for i, row in df.iterrows()
@@ -230,162 +246,101 @@ else:
 
 app = dash.Dash(__name__)
 
-# Layout
+# Layout without dcc.Loading to prevent white screen
 app.layout = html.Div([
     html.H1("BESS Incident Map", style={'fontFamily': 'Arial, sans-serif', 'textAlign': 'center'}),
     html.P("Click a card or marker to view details.", style={'fontFamily': 'Arial, sans-serif', 'textAlign': 'center'}),
-    dcc.Loading(
-        id="loading",
-        type="circle",
-        children=html.Div(
-            style={'display': 'flex', 'height': '100vh', 'fontFamily': 'Arial, sans-serif'},
-            children=[
-                html.Div(
-                    id='location-list',
-                    style={'width': '30%', 'overflowY': 'auto', 'padding': '20px'},
-                    children=location_list_children if not df.empty else [
-                        html.P("No data available.", style={'fontFamily': 'Arial, sans-serif'})
-                    ]
-                ),
-                html.Div(
-                    style={'width': '70%'},
-                    children=[
-                        dl.Map(
-                            id='location-map',
-                            center=initial_center,
-                            zoom=initial_zoom,
-                            minZoom=2,
-                            maxBounds=[[-90, -180], [90, 180]],
-                            maxBoundsViscosity=1.0,
-                            children=[
-                                dl.TileLayer(),
-                                dl.LayerGroup(id='marker-layer', children=[
-                                    dl.CircleMarker(
-                                        center=[row['latitude'], row['longitude']],
-                                        radius=5,
-                                        color='blue',
-                                        fillColor='blue',
-                                        fillOpacity=0.8,
-                                        id={'type': 'marker', 'index': i}
-                                    )
-                                    for i, row in df.iterrows()
-                                ] if not df.empty else [])
-                            ],
-                            style={'width': '100%', 'height': '100vh'}
-                        ),
-                        dcc.Store(id='selected-index', data=-1)
-                    ]
-                )
-            ]
-        )
+    html.Div(
+        style={'display': 'flex', 'height': '100vh', 'fontFamily': 'Arial, sans-serif'},
+        children=[
+            html.Div(
+                id='location-list',
+                style={'width': '30%', 'overflowY': 'auto', 'padding': '20px'},
+                children=location_list_children if not df.empty else [
+                    html.P("No data available.", style={'fontFamily': 'Arial, sans-serif'})
+                ]
+            ),
+            html.Div(
+                style={'width': '70%'},
+                children=[
+                    dl.Map(
+                        id='location-map',
+                        center=initial_center,
+                        zoom=initial_zoom,
+                        minZoom=2,
+                        maxBounds=[[-90, -180], [90, 180]],
+                        maxBoundsViscosity=1.0,
+                        children=[
+                            dl.TileLayer(),
+                            dl.LayerGroup(id='marker-layer', children=[
+                                dl.CircleMarker(
+                                    center=[row['latitude'], row['longitude']],
+                                    radius=scale_radius(row['Capacity (MW)']),
+                                    color='blue',
+                                    fillColor='blue',
+                                    fillOpacity=0.8,
+                                    id={'type': 'marker', 'index': i}
+                                )
+                                for i, row in df.iterrows()
+                            ] if not df.empty else [])
+                        ],
+                        style={'width': '100%', 'height': '100vh'}
+                    ),
+                    dcc.Store(id='selected-index', data=-1)
+                ]
+            )
+        ]
     )
 ])
 
-@app.callback(
+# Clientside callback for marker and card updates
+app.clientside_callback(
+    """
+    function(n_clicks_list, n_clicks_markers, selected_index, children) {
+        // Debounce clicks
+        let lastClickTime = window.lastClickTime || 0;
+        const now = Date.now();
+        if (now - lastClickTime < 300) return window.dash_clientside.no_update;
+        window.lastClickTime = now;
+
+        console.log("Clientside update: selected_index=" + selected_index);
+
+        // Update markers
+        const maxCapacity = %s;
+        const markers = window.dash_clientside_data.map(([lat, lng, capacity], i) => {
+            const baseRadius = capacity > 0 && maxCapacity > 0 ? 
+                5 + (20 - 5) * (capacity / maxCapacity) : 5;
+            return {
+                position: [lat, lng],
+                radius: i === selected_index ? baseRadius * 1.5 : baseRadius,
+                color: i === selected_index ? 'red' : 'blue',
+                fillColor: i === selected_index ? 'red' : 'blue',
+                fillOpacity: 0.8,
+                id: {'type': 'marker', 'index': i}
+            };
+        });
+
+        // Update card styles
+        const updated_children = children.map((child, i) => {
+            child.props.style = {
+                ...child.props.style,
+                border: i === selected_index ? '2px solid red' : '1px solid black'
+            };
+            return child;
+        });
+
+        return [markers, updated_children];
+    }
+    """ % (df['Capacity (MW)'].max() if not df.empty else 1),
     [Output('marker-layer', 'children'),
-     Output('location-list', 'children'),
-     Output('selected-index', 'data')],
-    Input({'type': 'location-item', 'index': dash.ALL}, 'n_clicks'),
-    Input({'type': 'marker', 'index': dash.ALL}, 'n_clicks'),
-    State('location-list', 'children'),
-    State({'type': 'location-item', 'index': dash.ALL}, 'id'),
-    prevent_initial_call=True
+     Output('location-list', 'children')],
+    [Input({'type': 'location-item', 'index': dash.ALL}, 'n_clicks'),
+     Input({'type': 'marker', 'index': dash.ALL}, 'n_clicks'),
+     Input('selected-index', 'data')],
+    State('location-list', 'children')
 )
-def update_app(n_clicks_list, n_clicks_markers, current_items, item_ids):
-    try:
-        print("update_app CALLED")
-        ctx = dash.callback_context
-        if not ctx.triggered_id:
-            raise PreventUpdate
 
-        clicked_index = -1
-        if isinstance(ctx.triggered_id, dict) and ctx.triggered_id.get('type') == 'location-item':
-            clicked_index = int(ctx.triggered_id['index'])
-            print(f"List click: Index {clicked_index}, Location: {df.iloc[clicked_index]['Location']}")
-        elif isinstance(ctx.triggered_id, dict) and ctx.triggered_id.get('type') == 'marker':
-            clicked_index = int(ctx.triggered_id['index'])
-            print(f"Map click: Index {clicked_index}, Location: {df.iloc[clicked_index]['Location']}")
-        else:
-            raise PreventUpdate
-
-        markers = [
-            dl.CircleMarker(
-                center=[row['latitude'], row['longitude']],
-                radius=10 if i == clicked_index else 5,
-                color='red' if i == clicked_index else 'blue',
-                fillColor='red' if i == clicked_index else 'blue',
-                fillOpacity=0.8,
-                id={'type': 'marker', 'index': i}
-            )
-            for i, row in df.iterrows()
-        ]
-        print(f"Updated markers: Selected index {clicked_index} set to red")
-
-        updated_items = [
-            html.Div(
-                id={'type': 'location-item', 'index': i},
-                children=[
-                    html.Div(
-                        style={'display': 'flex', 'alignItems': 'flex-start'},
-                        children=[
-                            html.Img(
-                                src=row[image_columns[0]],
-                                style={'maxWidth': '150px', 'height': 'auto', 'marginRight': '10px'}
-                            ) if image_columns and pd.notnull(row[image_columns[0]]) and str(row[image_columns[0]]).startswith(('http://', 'https://'))
-                            else html.Div(style={'width': '150px'}),
-                            html.Div([
-                                html.H3(f"{row['Location']}", style={'margin': 0, 'fontFamily': 'Arial, sans-serif'}),
-                                html.Div([
-                                    html.P([
-                                        html.Span(f"{col}: ", style={
-                                            'fontWeight': 'bold',
-                                            'fontFamily': 'Arial, sans-serif',
-                                            'fontSize': '14px'
-                                        }),
-                                        html.A(
-                                            str(row[col]),
-                                            href=str(row[col]),
-                                            target="_blank",
-                                            style={
-                                                'fontWeight': 'normal',
-                                                'color': 'blue',
-                                                'textDecoration': 'underline',
-                                                'fontSize': '14px',
-                                                'fontFamily': 'Arial, sans-serif'
-                                            }
-                                        ) if col in url_columns and pd.notnull(row[col]) and str(row[col]).startswith(('http://', 'https://'))
-                                        else html.Span(
-                                            f"{row[col].strftime('%Y-%m-%d') if col == 'Event Date' and pd.notnull(row[col]) else str(row[col])}",
-                                            style={
-                                                'fontWeight': 'bold' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'normal',
-                                                'color': 'red' if col in ['Capacity (MW)', 'Capacity (MWh)'] else 'black',
-                                                'fontSize': '18px' if col in ['Capacity (MW)', 'Capacity (MWh)'] else '14px',
-                                                'fontFamily': 'Arial, sans-serif'
-                                            }
-                                        )
-                                    ], style={'margin': '2px 0'})
-                                    for col in df.columns if col not in ['index', 'latitude', 'longitude', 'Lat', 'Long', 'Image URL 1', 'Image URL 2', 'Image URL 3']
-                                ], style={'marginTop': '5px'})
-                            ])
-                        ]
-                    )
-                ],
-                style={
-                    'marginBottom': '10px',
-                    'padding': '10px',
-                    'cursor': 'pointer',
-                    'border': '2px solid red' if i == clicked_index else '1px solid black'
-                },
-                **{'data-index': i}
-            )
-            for i, row in df.iterrows()
-        ]
-
-        return markers, updated_items, clicked_index
-    except Exception as e:
-        print(f"Error in update_app: {e}")
-        raise PreventUpdate
-
+# Clientside callback for map centering and scrolling
 app.clientside_callback(
     """
     function(children, selected_index) {
@@ -418,17 +373,33 @@ app.clientside_callback(
     Input('selected-index', 'data')
 )
 
+# Clientside callback to inject coordinates and capacities
 app.clientside_callback(
     """
     function(map_id) {
-        console.log("Injecting coordinates for map_id: " + map_id);
+        console.log("Injecting coordinates and capacities for map_id: " + map_id);
         window.dash_clientside_data = %s;
         return window.dash_clientside.no_update;
     }
-    """ % df[['latitude', 'longitude']].values.tolist(),
+    """ % (df[['latitude', 'longitude', 'Capacity (MW)']].values.tolist() if not df.empty else []),
     Output('location-map', 'id'),
     Input('location-map', 'id')
 )
+
+# Server-side callback to update selected-index
+@app.callback(
+    Output('selected-index', 'data'),
+    [Input({'type': 'location-item', 'index': dash.ALL}, 'n_clicks'),
+     Input({'type': 'marker', 'index': dash.ALL}, 'n_clicks')],
+    prevent_initial_call=True
+)
+def update_selected_index(n_clicks_list, n_clicks_markers):
+    ctx = dash.callback_context
+    if not ctx.triggered_id:
+        raise PreventUpdate
+    clicked_index = ctx.triggered_id['index']
+    print(f"Selected index: {clicked_index}, Location: {df.iloc[clicked_index]['Location']}")
+    return clicked_index
 
 # Expose server for Gunicorn
 server = app.server
